@@ -15,6 +15,7 @@ const client = new Client();
 const PREFIX = '.';
 const activeIntervals = new Map();
 const responderCache = new Map();
+const responderCooldowns = new Map();
 
 function isAuthorized(userId) {
   return userId === client.user.id || OWNER_IDS.includes(userId);
@@ -476,12 +477,20 @@ async function handleResponders(message) {
   if (message.author.bot) return;
 
   const channelId = message.channel.id;
+  const now = Date.now();
+
   if (!responderCache.has(channelId)) return;
 
   const responders = responderCache.get(channelId);
   const messageContent = message.content.toLowerCase();
 
   for (const responder of responders) {
+    const cooldownKey = `${responder.id}-${channelId}`;
+
+    if (responderCooldowns.has(cooldownKey) && (now - responderCooldowns.get(cooldownKey) < 5000)) {
+      continue;
+    }
+
     const aliases = JSON.parse(responder.aliases);
     for (const alias of aliases) {
       const regex = new RegExp(`\\b${alias}\\b`, 'i');
@@ -489,6 +498,8 @@ async function handleResponders(message) {
         try {
           await message.channel.send(responder.response_text);
           console.log(`Responder triggered for alias "${alias}" in channel ${channelId}`);
+          
+          responderCooldowns.set(cooldownKey, now);
         } catch (err) {
           console.error(`Failed to send responder message: ${err}`);
         }
