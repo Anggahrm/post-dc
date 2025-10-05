@@ -78,14 +78,13 @@ async function startAutoPost(taskId) {
       console.log(`Channel dengan ID ${task.channel_id} tidak ditemukan`);
       return false;
     }
-    
-    const interval = setInterval(async () => {
+
+    const postMessage = async () => {
       try {
         let finalContent = task.message_text || '';
 
         if (task.embed_data) {
           const embedData = JSON.parse(task.embed_data);
-          // PERBAIKAN: Menghapus .setFooter() karena tidak didukung oleh WebEmbed
           const embed = new WebEmbed()
             .setTitle(embedData.title || null)
             .setDescription(embedData.description || null)
@@ -108,7 +107,11 @@ async function startAutoPost(taskId) {
       } catch (error) {
         console.error(`Error mengirim pesan untuk task ${taskId}:`, error);
       }
-    }, task.delay_ms);
+    };
+
+    postMessage();
+
+    const interval = setInterval(postMessage, task.delay_ms);
     
     activeIntervals.set(taskId, interval);
     
@@ -117,7 +120,7 @@ async function startAutoPost(taskId) {
       [taskId]
     );
     
-    console.log(`Auto post untuk task ${taskId} (${task.task_name}) telah dimulai dengan delay ${task.delay_ms}ms`);
+    console.log(`Auto post untuk task ${taskId} (${task.task_name}) telah dimulai. Pesan pertama dikirim, selanjutnya setiap ${task.delay_ms}ms.`);
     return true;
   } catch (error) {
     console.error(`Error memulai auto post untuk task ${taskId}:`, error);
@@ -263,16 +266,13 @@ client.on('messageCreate', async (message) => {
         const parts = fullArgs.split('|');
         
         if (parts.length < 4) {
-          // PERBAIKAN: Memperbarui contoh penggunaan tanpa footer
           return message.reply('Format tidak valid. Gunakan: `.set <task_name>|<message_text>|<channel_id>|<delay>`\nContoh tanpa embed: `.set Jualan|# Sell Script|1364460677967908960|1h 30m`\nContoh dengan embed: `.set Promosi|# Cek promosi!|1364460677967908960|2h|Judul Embed|Deskripsi Embed|#00FF00`');
         }
         
-        // PERBAIKAN: Menghapus pemisahan untuk footer
         const [taskName, messageText, channelId, delayString, embedTitle, embedDescription, embedColor] = parts;
         
         let embedData = null;
         if (parts.length > 4) {
-          // PERBAIKAN: Menghapus footer dari objek embedData
           embedData = JSON.stringify({
             title: embedTitle && embedTitle !== '-' ? embedTitle.trim() : null,
             description: embedDescription && embedDescription !== '-' ? embedDescription.trim() : null,
