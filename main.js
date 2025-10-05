@@ -186,7 +186,7 @@ async function deleteTask(taskId) {
     console.log(`Task dengan ID ${taskId} telah dihapus`);
     return true;
   } catch (error) {
-    console.error(`Error menghapus task ${taskId}:`, error);
+    console.error('Error menghapus task ${taskId}:`, error);
     return false;
   }
 }
@@ -250,7 +250,7 @@ async function stopResponder(responderId) {
     console.log(`Responder dengan ID ${responderId} telah dihentikan`);
     return true;
   } catch (error) {
-    console.error(`Error menghentikan responder ${responderId}:`, error);
+    console.error('Error menghentikan responder ${responderId}:`, error);
     return false;
   }
 }
@@ -262,7 +262,7 @@ async function startResponder(responderId) {
     console.log(`Responder dengan ID ${responderId} telah dimulai`);
     return true;
   } catch (error) {
-    console.error(`Error memulai responder ${responderId}:`, error);
+    console.error('Error memulai responder ${responderId}:`, error);
     return false;
   }
 }
@@ -274,7 +274,7 @@ async function deleteResponder(responderId) {
     console.log(`Responder dengan ID ${responderId} telah dihapus`);
     return true;
   } catch (error) {
-    console.error('Error menghapus responder ${responderId}:`, error);
+    console.error('Error menghapus responder ${responderId}:', error);
     return false;
   }
 }
