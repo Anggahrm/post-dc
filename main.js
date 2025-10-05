@@ -86,11 +86,17 @@ async function loadRespondersIntoCache() {
     responderCache.clear();
     result.rows.forEach(responder => {
       const channelIds = JSON.parse(responder.channel_id);
+      const aliases = JSON.parse(responder.aliases);
       channelIds.forEach(channelId => {
         if (!responderCache.has(channelId)) {
           responderCache.set(channelId, []);
         }
-        responderCache.get(channelId).push(responder);
+        responderCache.get(channelId).push({
+          id: responder.id,
+          aliases: aliases,
+          responseText: responder.response_text,
+          channelIds: channelIds
+        });
       });
     });
     console.log(`Loaded ${result.rows.length} active responders into cache.`);
@@ -489,12 +495,12 @@ async function handleResponders(message) {
   const messageContent = message.content.toLowerCase();
 
   for (const responder of responders) {
-    const aliases = JSON.parse(responder.aliases);
+    const aliases = responder.aliases;
     for (const alias of aliases) {
       const regex = new RegExp(`\\b${alias}\\b`, 'i');
       if (regex.test(messageContent)) {
         try {
-          await message.channel.send(responder.response_text);
+          await message.channel.send(responder.responseText);
           console.log(`Responder triggered for alias "${alias}" in channel ${channelId}`);
         } catch (err) {
           console.error(`Failed to send responder message: ${err}`);
