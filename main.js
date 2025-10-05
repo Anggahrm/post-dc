@@ -46,7 +46,6 @@ function hexToColor(hex) {
 
 async function initDatabase() {
   try {
-    // Buat tabel jika belum ada
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auto_post_tasks (
         id SERIAL PRIMARY KEY,
@@ -61,13 +60,11 @@ async function initDatabase() {
     `);
     console.log('Table checked/created successfully');
 
-    // TAMBAHKAN KOLOM BARU JIKA BELUM ADA (UNTUK UPDATE)
     try {
       await pool.query(`ALTER TABLE auto_post_tasks ADD COLUMN IF NOT EXISTS embed_data TEXT;`);
       console.log('Column embed_data checked/added successfully');
     } catch (alterError) {
-      // Abaikan error jika kolom sudah ada
-      if (alterError.code !== '42701') { // 42701 adalah kode error untuk kolom duplikat
+      if (alterError.code !== '42701') {
         console.error('Error adding embed_data column:', alterError);
       } else {
         console.log('Column embed_data already exists.');
@@ -274,13 +271,13 @@ client.on('messageCreate', async (message) => {
       }
         
       case 'set': {
-        if (args.length === 0) return message.reply('Usage: `.set <task_name> | <message_text> | <channel_id> | <delay> | [embed_title] | [embed_description] | [embed_color] | [embed_footer]`');
+        if (args.length === 0) return message.reply('Usage: `.set <task_name>|<message_text>|<channel_id>|<delay>`');
         
         const fullArgs = args.join(' ');
-        const parts = fullArgs.split(' | ');
+        const parts = fullArgs.split('|');
         
         if (parts.length < 4) {
-          return message.reply('Format tidak valid. Gunakan: `.set <task_name> | <message_text> | <channel_id> | <delay> | [embed_title] | [embed_description] | [embed_color] | [embed_footer]`\nContoh tanpa embed: `.set Jualan | # Sell Script | 1364460677967908960 | 1h 30m`\nContoh dengan embed: `.set Promosi | # Cek promosi! | 1364460677967908960 | 2h | Judul Embed | Deskripsi Embed | #00FF00 | Footer Text`');
+          return message.reply('Format tidak valid. Gunakan: `.set <task_name>|<message_text>|<channel_id>|<delay>`\nContoh tanpa embed: `.set Jualan|# Sell Script|1364460677967908960|1h 30m`\nContoh dengan embed: `.set Promosi|# Cek promosi!|1364460677967908960|2h|Judul Embed|Deskripsi Embed|#00FF00|Footer Text`');
         }
         
         const [taskName, messageText, channelId, delayString, embedTitle, embedDescription, embedColor, embedFooter] = parts;
@@ -288,14 +285,14 @@ client.on('messageCreate', async (message) => {
         let embedData = null;
         if (parts.length > 4) {
           embedData = JSON.stringify({
-            title: embedTitle && embedTitle !== '-' ? embedTitle : null,
-            description: embedDescription && embedDescription !== '-' ? embedDescription : null,
-            color: embedColor && embedColor !== '-' ? embedColor : null,
-            footer: embedFooter && embedFooter !== '-' ? embedFooter : null
+            title: embedTitle && embedTitle !== '-' ? embedTitle.trim() : null,
+            description: embedDescription && embedDescription !== '-' ? embedDescription.trim() : null,
+            color: embedColor && embedColor !== '-' ? embedColor.trim() : null,
+            footer: embedFooter && embedFooter !== '-' ? embedFooter.trim() : null
           });
         }
 
-        const taskId = await createTask(taskName, messageText, channelId, delayString, embedData);
+        const taskId = await createTask(taskName.trim(), messageText.trim(), channelId.trim(), delayString.trim(), embedData);
         if (taskId) {
           message.reply(`✅ Task baru berhasil dibuat dengan ID: ${taskId}. Gunakan \`.start ${taskId}\` untuk memulainya.`);
         } else {
