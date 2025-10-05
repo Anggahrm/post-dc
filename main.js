@@ -37,7 +37,6 @@ function parseDelay(delayString) {
   return totalMilliseconds || 60000;
 }
 
-// Fungsi untuk mengkonversi warna hex ke integer yang bisa dibaca Discord
 function hexToColor(hex) {
   if (!hex) return null;
   hex = hex.replace('#', '');
@@ -47,20 +46,34 @@ function hexToColor(hex) {
 
 async function initDatabase() {
   try {
+    // Buat tabel jika belum ada
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auto_post_tasks (
-        id INTEGER PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         task_name VARCHAR(255),
         message_text TEXT,
         channel_id VARCHAR(255),
         delay_ms INTEGER,
         is_active BOOLEAN DEFAULT false,
         last_post_time TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        embed_data TEXT
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    console.log('Database initialized successfully');
+    console.log('Table checked/created successfully');
+
+    // TAMBAHKAN KOLOM BARU JIKA BELUM ADA (UNTUK UPDATE)
+    try {
+      await pool.query(`ALTER TABLE auto_post_tasks ADD COLUMN IF NOT EXISTS embed_data TEXT;`);
+      console.log('Column embed_data checked/added successfully');
+    } catch (alterError) {
+      // Abaikan error jika kolom sudah ada
+      if (alterError.code !== '42701') { // 42701 adalah kode error untuk kolom duplikat
+        console.error('Error adding embed_data column:', alterError);
+      } else {
+        console.log('Column embed_data already exists.');
+      }
+    }
+
   } catch (error) {
     console.error('Error initializing database:', error);
   }
@@ -91,7 +104,6 @@ async function startAutoPost(taskId) {
       try {
         let messageOptions = { content: task.message_text || null };
 
-        // Jika ada data embed, buat embed dan tambahkan ke options
         if (task.embed_data) {
           const embedData = JSON.parse(task.embed_data);
           const embed = new EmbedBuilder()
@@ -103,7 +115,6 @@ async function startAutoPost(taskId) {
           messageOptions.embeds = [embed];
         }
 
-        // Kirim pesan, baik hanya teks atau dengan embed
         await channel.send(messageOptions);
         console.log(`Pesan terkirim untuk task ${taskId} (${task.task_name})`);
         
@@ -198,7 +209,6 @@ async function createTask(taskName, messageText, channelId, delayString, embedDa
   try {
     const delayMs = parseDelay(delayString);
     
-    // Cari ID yang tersedia
     const existingIdsResult = await pool.query('SELECT id FROM auto_post_tasks ORDER BY id');
     const existingIds = existingIdsResult.rows.map(row => row.id);
     let newId = 1;
@@ -207,8 +217,8 @@ async function createTask(taskName, messageText, channelId, delayString, embedDa
     }
 
     const result = await pool.query(
-      'INSERT INTO auto_post_tasks (id, task_name, message_text, channel_id, delay_ms, embed_data) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-      [newId, taskName, messageText, channelId, delayMs, embedData]
+      'INSERT INTO auto_post_tasks (task_name, message_text, channel_id, delay_ms, embed_data) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [taskName, messageText, channelId, delayMs, embedData]
     );
     
     console.log(`Task baru berhasil dibuat dengan ID: ${result.rows[0].id}`);
@@ -276,7 +286,6 @@ client.on('messageCreate', async (message) => {
         const [taskName, messageText, channelId, delayString, embedTitle, embedDescription, embedColor, embedFooter] = parts;
         
         let embedData = null;
-        // Jika ada data embed (lebih dari 4 bagian)
         if (parts.length > 4) {
           embedData = JSON.stringify({
             title: embedTitle && embedTitle !== '-' ? embedTitle : null,
