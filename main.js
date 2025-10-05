@@ -15,7 +15,6 @@ const client = new Client();
 const PREFIX = '.';
 const activeIntervals = new Map();
 const responderCache = new Map();
-const responderCooldowns = new Map();
 
 function isAuthorized(userId) {
   return userId === client.user.id || OWNER_IDS.includes(userId);
@@ -69,7 +68,7 @@ async function initDatabase() {
         id SERIAL PRIMARY KEY,
         aliases TEXT,
         response_text TEXT,
-        channel_id VARCHAR(255),
+        channel_id TEXT,
         is_active BOOLEAN DEFAULT true,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
@@ -86,11 +85,13 @@ async function loadRespondersIntoCache() {
     const result = await pool.query('SELECT * FROM auto_responders WHERE is_active = true');
     responderCache.clear();
     result.rows.forEach(responder => {
-      const channelId = responder.channel_id;
-      if (!responderCache.has(channelId)) {
-        responderCache.set(channelId, []);
-      }
-      responderCache.get(channelId).push(responder);
+      const channelIds = JSON.parse(responder.channel_id);
+      channelIds.forEach(channelId => {
+        if (!responderCache.has(channelId)) {
+          responderCache.set(channelId, []);
+        }
+        responderCache.get(channelId).push(responder);
+      });
     });
     console.log(`Loaded ${result.rows.length} active responders into cache.`);
   } catch (error) {
@@ -190,19 +191,22 @@ async function deleteTask(taskId) {
   }
 }
 
-async function createResponder(aliases, responseText, channelId) {
+async function createResponder(aliases, responseText, channelIds) {
   try {
     const aliasesJson = JSON.stringify(aliases);
+    const channelIdsJson = JSON.stringify(channelIds);
     const result = await pool.query(
       'INSERT INTO auto_responders (aliases, response_text, channel_id) VALUES ($1, $2, $3) RETURNING id',
-      [aliasesJson, responseText, channelId]
+      [aliasesJson, responseText, channelIdsJson]
     );
     
-    const newResponder = { id: result.rows[0].id, aliases, responseText, channelId };
-    if (!responderCache.has(channelId)) {
-      responderCache.set(channelId, []);
-    }
-    responderCache.get(channelId).push(newResponder);
+    const newResponder = { id: result.rows[0].id, aliases, responseText, channelIds };
+    channelIds.forEach(channelId => {
+        if (!responderCache.has(channelId)) {
+            responderCache.set(channelId, []);
+        }
+        responderCache.get(channelId).push(newResponder);
+    });
 
     console.log(`Responder baru berhasil dibuat dengan ID: ${result.rows[0].id}`);
     return result.rows[0].id;
@@ -224,10 +228,11 @@ async function listResponders() {
     result.rows.forEach((responder, index) => {
       const status = responder.is_active ? '✅ AKTIF' : '❌ NON-AKTIF';
       const aliasList = JSON.parse(responder.aliases).join(', ');
+      const channelList = JSON.parse(responder.channel_id).join(', ');
       
       responderList += `${index + 1}. ID: ${responder.id} | Status: ${status}\n`;
       responderList += `   Aliases: ${aliasList}\n`;
-      responderList += `   Channel: ${responder.channel_id}\n`;
+      responderList += `   Channels: ${channelList}\n`;
       responderList += `   Response: ${responder.response_text.substring(0, 50)}${responder.response_text.length > 50 ? '...' : ''}\n\n`;
     });
     
@@ -269,7 +274,7 @@ async function deleteResponder(responderId) {
     console.log(`Responder dengan ID ${responderId} telah dihapus`);
     return true;
   } catch (error) {
-    console.error(`Error menghapus responder ${responderId}:`, error);
+    console.error('Error menghapus responder ${responderId}:`, error);
     return false;
   }
 }
@@ -381,19 +386,20 @@ async function handleCommands(message) {
       }
 
       case 'addr': {
-        if (args.length === 0) return message.reply('Usage: `.addr <alias1>/<alias2>/...|<response_text>|<channel_id>`');
+        if (args.length === 0) return message.reply('Usage: `.addr <alias1>/<alias2>/...|<response_text>|<channel_id1>/<channel_id2>/...`');
         
         const fullArgs = args.join(' ');
         const parts = fullArgs.split('|');
         
         if (parts.length < 3) {
-          return message.reply('Format tidak valid. Gunakan: `.addr <alias1>/<alias2>/...|<response_text>|<channel_id>`');
+          return message.reply('Format tidak valid. Gunakan: `.addr <alias1>/<alias2>/...|<response_text>|<channel_id1>/<channel_id2>/...`');
         }
         
-        const [aliasString, responseText, channelId] = parts;
+        const [aliasString, responseText, channelIdString] = parts;
         const aliases = aliasString.split('/').map(a => a.trim());
+        const channelIds = channelIdString.split('/').map(c => c.trim());
 
-        const responderId = await createResponder(aliases, responseText.trim(), channelId.trim());
+        const responderId = await createResponder(aliases, responseText.trim(), channelIds);
         if (responderId) {
           message.reply(`✅ Responder baru berhasil dibuat dengan ID: ${responderId}.`);
         } else {
@@ -474,23 +480,15 @@ async function handleCommands(message) {
 }
 
 async function handleResponders(message) {
-  if (message.author.bot) return;
+  if (message.author.id === client.user.id) return;
 
   const channelId = message.channel.id;
-  const now = Date.now();
-
   if (!responderCache.has(channelId)) return;
 
   const responders = responderCache.get(channelId);
   const messageContent = message.content.toLowerCase();
 
   for (const responder of responders) {
-    const cooldownKey = `${responder.id}-${channelId}`;
-
-    if (responderCooldowns.has(cooldownKey) && (now - responderCooldowns.get(cooldownKey) < 5000)) {
-      continue;
-    }
-
     const aliases = JSON.parse(responder.aliases);
     for (const alias of aliases) {
       const regex = new RegExp(`\\b${alias}\\b`, 'i');
@@ -498,8 +496,6 @@ async function handleResponders(message) {
         try {
           await message.channel.send(responder.response_text);
           console.log(`Responder triggered for alias "${alias}" in channel ${channelId}`);
-          
-          responderCooldowns.set(cooldownKey, now);
         } catch (err) {
           console.error(`Failed to send responder message: ${err}`);
         }
@@ -523,7 +519,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  if (message.author.bot) return;
   await handleResponders(message);
 });
 
