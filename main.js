@@ -1,4 +1,4 @@
-const { Client, WebEmbed } = require('discord.js-selfbot-v13');
+const { Client } = require('discord.js-selfbot-v13');
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -9,6 +9,7 @@ const pool = new Pool({
 const client = new Client();
 const PREFIX = '.';
 const activeIntervals = new Map();
+const responderCache = new Map();
 
 function parseDelay(delayString) {
   let totalMilliseconds = 0;
@@ -48,13 +49,45 @@ async function initDatabase() {
         delay_ms INTEGER,
         is_active BOOLEAN DEFAULT false,
         last_post_time TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        embed_data TEXT
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    console.log('Database initialized successfully');
+    console.log('Table auto_post_tasks checked/created');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auto_responders (
+        id SERIAL PRIMARY KEY,
+        aliases TEXT,
+        response_text TEXT,
+        channel_id VARCHAR(255),
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('Table auto_responders checked/created');
+
+    await pool.query(`ALTER TABLE auto_post_tasks DROP COLUMN IF EXISTS embed_data;`);
+    console.log('Column embed_data dropped from auto_post_tasks if it existed');
+
   } catch (error) {
     console.error('Error initializing database:', error);
+  }
+}
+
+async function loadRespondersIntoCache() {
+  try {
+    const result = await pool.query('SELECT * FROM auto_responders WHERE is_active = true');
+    responderCache.clear();
+    result.rows.forEach(responder => {
+      const channelId = responder.channel_id;
+      if (!responderCache.has(channelId)) {
+        responderCache.set(channelId, []);
+      }
+      responderCache.get(channelId).push(responder);
+    });
+    console.log(`Loaded ${result.rows.length} active responders into cache.`);
+  } catch (error) {
+    console.error('Error loading responders into cache:', error);
   }
 }
 
@@ -81,18 +114,7 @@ async function startAutoPost(taskId) {
 
     const postMessage = async () => {
       try {
-        let finalContent = task.message_text || '';
-
-        if (task.embed_data) {
-          const embedData = JSON.parse(task.embed_data);
-          const embed = new WebEmbed()
-            .setTitle(embedData.title || null)
-            .setDescription(embedData.description || null)
-            .setColor(embedData.color || null);
-          
-          finalContent += embed.toString();
-        }
-
+        const finalContent = task.message_text || '';
         if (finalContent) {
             await channel.send(finalContent);
             console.log(`Pesan terkirim untuk task ${taskId} (${task.task_name})`);
@@ -110,9 +132,7 @@ async function startAutoPost(taskId) {
     };
 
     postMessage();
-
     const interval = setInterval(postMessage, task.delay_ms);
-    
     activeIntervals.set(taskId, interval);
     
     await pool.query(
@@ -120,7 +140,7 @@ async function startAutoPost(taskId) {
       [taskId]
     );
     
-    console.log(`Auto post untuk task ${taskId} (${task.task_name}) telah dimulai. Pesan pertama dikirim, selanjutnya setiap ${task.delay_ms}ms.`);
+    console.log(`Auto post untuk task ${taskId} (${task.task_name}) telah dimulai.`);
     return true;
   } catch (error) {
     console.error(`Error memulai auto post untuk task ${taskId}:`, error);
@@ -163,6 +183,90 @@ async function deleteTask(taskId) {
   }
 }
 
+async function createResponder(aliases, responseText, channelId) {
+  try {
+    const aliasesJson = JSON.stringify(aliases);
+    const result = await pool.query(
+      'INSERT INTO auto_responders (aliases, response_text, channel_id) VALUES ($1, $2, $3) RETURNING id',
+      [aliasesJson, responseText, channelId]
+    );
+    
+    const newResponder = { id: result.rows[0].id, aliases, response_text, channel_id };
+    if (!responderCache.has(channelId)) {
+      responderCache.set(channelId, []);
+    }
+    responderCache.get(channelId).push(newResponder);
+
+    console.log(`Responder baru berhasil dibuat dengan ID: ${result.rows[0].id}`);
+    return result.rows[0].id;
+  } catch (error) {
+    console.error('Error membuat responder baru:', error);
+    return null;
+  }
+}
+
+async function listResponders() {
+  try {
+    const result = await pool.query('SELECT * FROM auto_responders ORDER BY id');
+    
+    if (result.rows.length === 0) {
+      return 'Tidak ada responder yang tersimpan.';
+    }
+    
+    let responderList = '=== LIST AUTO RESPONDER ===\n';
+    result.rows.forEach((responder, index) => {
+      const status = responder.is_active ? '✅ AKTIF' : '❌ NON-AKTIF';
+      const aliasList = JSON.parse(responder.aliases).join(', ');
+      
+      responderList += `${index + 1}. ID: ${responder.id} | Status: ${status}\n`;
+      responderList += `   Aliases: ${aliasList}\n`;
+      responderList += `   Channel: ${responder.channel_id}\n`;
+      responderList += `   Response: ${responder.response_text.substring(0, 50)}${responder.response_text.length > 50 ? '...' : ''}\n\n`;
+    });
+    
+    return responderList;
+  } catch (error) {
+    console.error('Error mengambil list responders:', error);
+    return 'Error mengambil list responders.';
+  }
+}
+
+async function stopResponder(responderId) {
+  try {
+    await pool.query('UPDATE auto_responders SET is_active = false WHERE id = $1', [responderId]);
+    await loadRespondersIntoCache();
+    console.log(`Responder dengan ID ${responderId} telah dihentikan`);
+    return true;
+  } catch (error) {
+    console.error(`Error menghentikan responder ${responderId}:`, error);
+    return false;
+  }
+}
+
+async function startResponder(responderId) {
+  try {
+    await pool.query('UPDATE auto_responders SET is_active = true WHERE id = $1', [responderId]);
+    await loadRespondersIntoCache();
+    console.log(`Responder dengan ID ${responderId} telah dimulai`);
+    return true;
+  } catch (error) {
+    console.error(`Error memulai responder ${responderId}:`, error);
+    return false;
+  }
+}
+
+async function deleteResponder(responderId) {
+  try {
+    await pool.query('DELETE FROM auto_responders WHERE id = $1', [responderId]);
+    await loadRespondersIntoCache();
+    console.log(`Responder dengan ID ${responderId} telah dihapus`);
+    return true;
+  } catch (error) {
+    console.error(`Error menghapus responder ${responderId}:`, error);
+    return false;
+  }
+}
+
 async function listTasks() {
   try {
     const result = await pool.query('SELECT * FROM auto_post_tasks ORDER BY id');
@@ -175,9 +279,8 @@ async function listTasks() {
     result.rows.forEach((task, index) => {
       const status = task.is_active ? '✅ AKTIF' : '❌ NON-AKTIF';
       const lastPost = task.last_post_time ? new Date(task.last_post_time).toLocaleString('id-ID') : 'Belum pernah post';
-      const hasEmbed = task.embed_data ? ' (Dengan Embed)' : '';
       
-      taskList += `${index + 1}. ID: ${task.id} | Nama: ${task.task_name} | Status: ${status}${hasEmbed}\n`;
+      taskList += `${index + 1}. ID: ${task.id} | Nama: ${task.task_name} | Status: ${status}\n`;
       taskList += `   Pesan: ${task.message_text.substring(0, 50)}${task.message_text.length > 50 ? '...' : ''}\n`;
       taskList += `   Channel: ${task.channel_id}\n`;
       taskList += `   Delay: ${task.delay_ms}ms (${(task.delay_ms / 60000).toFixed(2)} menit)\n`;
@@ -191,7 +294,7 @@ async function listTasks() {
   }
 }
 
-async function createTask(taskName, messageText, channelId, delayString, embedData) {
+async function createTask(taskName, messageText, channelId, delayString) {
   try {
     const delayMs = parseDelay(delayString);
     
@@ -203,8 +306,8 @@ async function createTask(taskName, messageText, channelId, delayString, embedDa
     }
 
     const result = await pool.query(
-      'INSERT INTO auto_post_tasks (task_name, message_text, channel_id, delay_ms, embed_data) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [taskName, messageText, channelId, delayMs, embedData]
+      'INSERT INTO auto_post_tasks (task_name, message_text, channel_id, delay_ms) VALUES ($1, $2, $3, $4) RETURNING id',
+      [taskName, messageText, channelId, delayMs]
     );
     
     console.log(`Task baru berhasil dibuat dengan ID: ${result.rows[0].id}`);
@@ -233,17 +336,7 @@ async function restartActiveTasks() {
   }
 }
 
-client.on('ready', async () => {
-  console.log(`${client.user.username} sudah online dan siap!`);
-  
-  await initDatabase();
-  await restartActiveTasks();
-});
-
-client.on('messageCreate', async (message) => {
-  if (message.author.id !== client.user.id) return;
-  if (!message.content.startsWith(PREFIX)) return;
-  
+async function handleCommands(message) {
   const args = message.content.slice(PREFIX.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
   
@@ -266,21 +359,12 @@ client.on('messageCreate', async (message) => {
         const parts = fullArgs.split('|');
         
         if (parts.length < 4) {
-          return message.reply('Format tidak valid. Gunakan: `.set <task_name>|<message_text>|<channel_id>|<delay>`\nContoh tanpa embed: `.set Jualan|# Sell Script|1364460677967908960|1h 30m`\nContoh dengan embed: `.set Promosi|# Cek promosi!|1364460677967908960|2h|Judul Embed|Deskripsi Embed|#00FF00`');
+          return message.reply('Format tidak valid. Gunakan: `.set <task_name>|<message_text>|<channel_id>|<delay>`');
         }
         
-        const [taskName, messageText, channelId, delayString, embedTitle, embedDescription, embedColor] = parts;
-        
-        let embedData = null;
-        if (parts.length > 4) {
-          embedData = JSON.stringify({
-            title: embedTitle && embedTitle !== '-' ? embedTitle.trim() : null,
-            description: embedDescription && embedDescription !== '-' ? embedDescription.trim() : null,
-            color: embedColor && embedColor !== '-' ? embedColor.trim() : null
-          });
-        }
+        const [taskName, messageText, channelId, delayString] = parts;
 
-        const taskId = await createTask(taskName.trim(), messageText.trim(), channelId.trim(), delayString.trim(), embedData);
+        const taskId = await createTask(taskName.trim(), messageText.trim(), channelId.trim(), delayString.trim());
         if (taskId) {
           message.reply(`✅ Task baru berhasil dibuat dengan ID: ${taskId}. Gunakan \`.start ${taskId}\` untuk memulainya.`);
         } else {
@@ -288,10 +372,48 @@ client.on('messageCreate', async (message) => {
         }
         break;
       }
+
+      case 'addr': {
+        if (args.length === 0) return message.reply('Usage: `.addr <alias1>/<alias2>/...|<response_text>|<channel_id>`');
+        
+        const fullArgs = args.join(' ');
+        const parts = fullArgs.split('|');
+        
+        if (parts.length < 3) {
+          return message.reply('Format tidak valid. Gunakan: `.addr <alias1>/<alias2>/...|<response_text>|<channel_id>`');
+        }
+        
+        const [aliasString, responseText, channelId] = parts;
+        const aliases = aliasString.split('/').map(a => a.trim());
+
+        const responderId = await createResponder(aliases, responseText.trim(), channelId.trim());
+        if (responderId) {
+          message.reply(`✅ Responder baru berhasil dibuat dengan ID: ${responderId}.`);
+        } else {
+          message.reply('❌ Gagal membuat responder baru.');
+        }
+        break;
+      }
+
+      case 'listr': {
+        const responderList = await listResponders();
+        message.reply(`\`\`\`${responderList}\`\`\``);
+        break;
+      }
         
       case 'list': {
         const taskList = await listTasks();
         message.reply(`\`\`\`${taskList}\`\`\``);
+        break;
+      }
+
+      case 'stopr': {
+        if (args.length === 0) return message.reply('Usage: `.stopr <responder_id>`');
+        const responderId = parseInt(args[0]);
+        if (isNaN(responderId)) return message.reply('ID responder harus berupa angka.');
+        
+        const success = await stopResponder(responderId);
+        message.reply(success ? `✅ Responder dengan ID ${responderId} telah dihentikan.` : `❌ Gagal menghentikan responder dengan ID ${responderId}.`);
         break;
       }
         
@@ -302,6 +424,26 @@ client.on('messageCreate', async (message) => {
         
         const success = await stopAutoPost(taskId);
         message.reply(success ? `✅ Task dengan ID ${taskId} telah dihentikan.` : `❌ Gagal menghentikan task dengan ID ${taskId}.`);
+        break;
+      }
+
+      case 'startr': {
+        if (args.length === 0) return message.reply('Usage: `.startr <responder_id>`');
+        const responderId = parseInt(args[0]);
+        if (isNaN(responderId)) return message.reply('ID responder harus berupa angka.');
+        
+        const success = await startResponder(responderId);
+        message.reply(success ? `✅ Responder dengan ID ${responderId} telah dimulai.` : `❌ Gagal memulai responder dengan ID ${responderId}.`);
+        break;
+      }
+        
+      case 'delr': {
+        if (args.length === 0) return message.reply('Usage: `.delr <responder_id>`');
+        const responderId = parseInt(args[0]);
+        if (isNaN(responderId)) return message.reply('ID responder harus berupa angka.');
+        
+        const success = await deleteResponder(responderId);
+        message.reply(success ? `✅ Responder dengan ID ${responderId} telah dihapus.` : `❌ Gagal menghapus responder dengan ID ${responderId}.`);
         break;
       }
         
@@ -316,12 +458,56 @@ client.on('messageCreate', async (message) => {
       }
         
       default:
-        message.reply(`Command tidak dikenali. Command yang tersedia: \`.set\`, \`.start\`, \`.list\`, \`.stop\`, \`.delete\``);
+        message.reply(`Command tidak dikenali. Command yang tersedia: \n**Auto Post:** \`.set\`, \`.start\`, \`.list\`, \`.stop\`, \`.delete\`\n**Responder:** \`.addr\`, \`.listr\`, \`.startr\`, \`.stopr\`, \`.delr\``);
     }
   } catch (error) {
     console.error('Error menangani command:', error);
     message.reply('Terjadi kesalahan saat mengeksekusi command.');
   }
+}
+
+async function handleResponders(message) {
+  if (message.author.bot) return;
+
+  const channelId = message.channel.id;
+  if (!responderCache.has(channelId)) return;
+
+  const responders = responderCache.get(channelId);
+  const messageContent = message.content.toLowerCase();
+
+  for (const responder of responders) {
+    const aliases = JSON.parse(responder.aliases);
+    for (const alias of aliases) {
+      const regex = new RegExp(`\\b${alias}\\b`, 'i');
+      if (regex.test(messageContent)) {
+        try {
+          await message.channel.send(responder.response_text);
+          console.log(`Responder triggered for alias "${alias}" in channel ${channelId}`);
+        } catch (err) {
+          console.error(`Failed to send responder message: ${err}`);
+        }
+        return;
+      }
+    }
+  }
+}
+
+client.on('ready', async () => {
+  console.log(`${client.user.username} sudah online dan siap!`);
+  
+  await initDatabase();
+  await loadRespondersIntoCache();
+  await restartActiveTasks();
+});
+
+client.on('messageCreate', async (message) => {
+  if (message.author.id !== client.user.id) {
+    await handleResponders(message);
+    return;
+  }
+  if (!message.content.startsWith(PREFIX)) return;
+  
+  await handleCommands(message);
 });
 
 client.login(process.env.DISCORD_TOKEN);
