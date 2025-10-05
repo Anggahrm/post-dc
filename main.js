@@ -1,6 +1,11 @@
 const { Client } = require('discord.js-selfbot-v13');
 const { Pool } = require('pg');
 
+const OWNER_IDS = [
+  '664114670579351562',
+  '914818330022535209'
+];
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
@@ -10,6 +15,10 @@ const client = new Client();
 const PREFIX = '.';
 const activeIntervals = new Map();
 const responderCache = new Map();
+
+function isAuthorized(userId) {
+  return userId === client.user.id || OWNER_IDS.includes(userId);
+}
 
 function parseDelay(delayString) {
   let totalMilliseconds = 0;
@@ -501,13 +510,13 @@ client.on('ready', async () => {
 });
 
 client.on('messageCreate', async (message) => {
-  if (message.author.id !== client.user.id) {
-    await handleResponders(message);
+  if (message.content.startsWith(PREFIX) && isAuthorized(message.author.id)) {
+    await handleCommands(message);
     return;
   }
-  if (!message.content.startsWith(PREFIX)) return;
-  
-  await handleCommands(message);
+
+  if (message.author.bot) return;
+  await handleResponders(message);
 });
 
 client.login(process.env.DISCORD_TOKEN);
