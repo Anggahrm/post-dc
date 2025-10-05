@@ -1,4 +1,4 @@
-const { Client } = require('discord.js-selfbot-v13');
+const { Client, EmbedBuilder } = require('discord.js-selfbot-v13');
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -37,18 +37,27 @@ function parseDelay(delayString) {
   return totalMilliseconds || 60000;
 }
 
+// Fungsi untuk mengkonversi warna hex ke integer yang bisa dibaca Discord
+function hexToColor(hex) {
+  if (!hex) return null;
+  hex = hex.replace('#', '');
+  const color = parseInt(hex, 16);
+  return isNaN(color) ? null : color;
+}
+
 async function initDatabase() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auto_post_tasks (
-        id SERIAL PRIMARY KEY,
+        id INTEGER PRIMARY KEY,
         task_name VARCHAR(255),
         message_text TEXT,
         channel_id VARCHAR(255),
         delay_ms INTEGER,
         is_active BOOLEAN DEFAULT false,
         last_post_time TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        embed_data TEXT
       )
     `);
     console.log('Database initialized successfully');
@@ -80,8 +89,23 @@ async function startAutoPost(taskId) {
     
     const interval = setInterval(async () => {
       try {
-        await channel.send(task.message_text);
-        console.log(`Pesan terkirim untuk task ${taskId} (${task.task_name}): ${task.message_text}`);
+        let messageOptions = { content: task.message_text || null };
+
+        // Jika ada data embed, buat embed dan tambahkan ke options
+        if (task.embed_data) {
+          const embedData = JSON.parse(task.embed_data);
+          const embed = new EmbedBuilder()
+            .setTitle(embedData.title || null)
+            .setDescription(embedData.description || null)
+            .setColor(hexToColor(embedData.color) || null)
+            .setFooter(embedData.footer ? { text: embedData.footer } : null);
+          
+          messageOptions.embeds = [embed];
+        }
+
+        // Kirim pesan, baik hanya teks atau dengan embed
+        await channel.send(messageOptions);
+        console.log(`Pesan terkirim untuk task ${taskId} (${task.task_name})`);
         
         await pool.query(
           'UPDATE auto_post_tasks SET last_post_time = CURRENT_TIMESTAMP WHERE id = $1',
@@ -154,8 +178,9 @@ async function listTasks() {
     result.rows.forEach((task, index) => {
       const status = task.is_active ? '✅ AKTIF' : '❌ NON-AKTIF';
       const lastPost = task.last_post_time ? new Date(task.last_post_time).toLocaleString('id-ID') : 'Belum pernah post';
+      const hasEmbed = task.embed_data ? ' (Dengan Embed)' : '';
       
-      taskList += `${index + 1}. ID: ${task.id} | Nama: ${task.task_name} | Status: ${status}\n`;
+      taskList += `${index + 1}. ID: ${task.id} | Nama: ${task.task_name} | Status: ${status}${hasEmbed}\n`;
       taskList += `   Pesan: ${task.message_text.substring(0, 50)}${task.message_text.length > 50 ? '...' : ''}\n`;
       taskList += `   Channel: ${task.channel_id}\n`;
       taskList += `   Delay: ${task.delay_ms}ms (${(task.delay_ms / 60000).toFixed(2)} menit)\n`;
@@ -169,13 +194,21 @@ async function listTasks() {
   }
 }
 
-async function createTask(taskName, messageText, channelId, delayString) {
+async function createTask(taskName, messageText, channelId, delayString, embedData) {
   try {
     const delayMs = parseDelay(delayString);
     
+    // Cari ID yang tersedia
+    const existingIdsResult = await pool.query('SELECT id FROM auto_post_tasks ORDER BY id');
+    const existingIds = existingIdsResult.rows.map(row => row.id);
+    let newId = 1;
+    while (existingIds.includes(newId)) {
+      newId++;
+    }
+
     const result = await pool.query(
-      'INSERT INTO auto_post_tasks (task_name, message_text, channel_id, delay_ms) VALUES ($1, $2, $3, $4) RETURNING id',
-      [taskName, messageText, channelId, delayMs]
+      'INSERT INTO auto_post_tasks (id, task_name, message_text, channel_id, delay_ms, embed_data) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      [newId, taskName, messageText, channelId, delayMs, embedData]
     );
     
     console.log(`Task baru berhasil dibuat dengan ID: ${result.rows[0].id}`);
@@ -231,18 +264,29 @@ client.on('messageCreate', async (message) => {
       }
         
       case 'set': {
-        if (args.length === 0) return message.reply('Usage: `.set <task_name> | <message_text> | <channel_id> | <delay>`');
+        if (args.length === 0) return message.reply('Usage: `.set <task_name> | <message_text> | <channel_id> | <delay> | [embed_title] | [embed_description] | [embed_color] | [embed_footer]`');
         
         const fullArgs = args.join(' ');
         const parts = fullArgs.split(' | ');
         
         if (parts.length < 4) {
-          return message.reply('Format tidak valid. Gunakan: `.set <task_name> | <message_text> | <channel_id> | <delay>`\nContoh: `.set Jualan | # Sell Script for GTFY | 1364460677967908960 | 1h 30m`');
+          return message.reply('Format tidak valid. Gunakan: `.set <task_name> | <message_text> | <channel_id> | <delay> | [embed_title] | [embed_description] | [embed_color] | [embed_footer]`\nContoh tanpa embed: `.set Jualan | # Sell Script | 1364460677967908960 | 1h 30m`\nContoh dengan embed: `.set Promosi | # Cek promosi! | 1364460677967908960 | 2h | Judul Embed | Deskripsi Embed | #00FF00 | Footer Text`');
         }
         
-        const [taskName, messageText, channelId, delayString] = parts;
+        const [taskName, messageText, channelId, delayString, embedTitle, embedDescription, embedColor, embedFooter] = parts;
         
-        const taskId = await createTask(taskName, messageText, channelId, delayString);
+        let embedData = null;
+        // Jika ada data embed (lebih dari 4 bagian)
+        if (parts.length > 4) {
+          embedData = JSON.stringify({
+            title: embedTitle && embedTitle !== '-' ? embedTitle : null,
+            description: embedDescription && embedDescription !== '-' ? embedDescription : null,
+            color: embedColor && embedColor !== '-' ? embedColor : null,
+            footer: embedFooter && embedFooter !== '-' ? embedFooter : null
+          });
+        }
+
+        const taskId = await createTask(taskName, messageText, channelId, delayString, embedData);
         if (taskId) {
           message.reply(`✅ Task baru berhasil dibuat dengan ID: ${taskId}. Gunakan \`.start ${taskId}\` untuk memulainya.`);
         } else {
