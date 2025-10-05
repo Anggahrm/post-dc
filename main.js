@@ -85,11 +85,11 @@ async function startAutoPost(taskId) {
 
         if (task.embed_data) {
           const embedData = JSON.parse(task.embed_data);
+          // PERBAIKAN: Menghapus .setFooter() karena tidak didukung oleh WebEmbed
           const embed = new WebEmbed()
             .setTitle(embedData.title || null)
             .setDescription(embedData.description || null)
-            .setColor(embedData.color || null)
-            .setFooter(embedData.footer ? { text: embedData.footer } : null);
+            .setColor(embedData.color || null);
           
           finalContent += embed.toString();
         }
@@ -263,18 +263,20 @@ client.on('messageCreate', async (message) => {
         const parts = fullArgs.split('|');
         
         if (parts.length < 4) {
-          return message.reply('Format tidak valid. Gunakan: `.set <task_name>|<message_text>|<channel_id>|<delay>`\nContoh tanpa embed: `.set Jualan|# Sell Script|1364460677967908960|1h 30m`\nContoh dengan embed: `.set Promosi|# Cek promosi!|1364460677967908960|2h|Judul Embed|Deskripsi Embed|#00FF00|Footer Text`');
+          // PERBAIKAN: Memperbarui contoh penggunaan tanpa footer
+          return message.reply('Format tidak valid. Gunakan: `.set <task_name>|<message_text>|<channel_id>|<delay>`\nContoh tanpa embed: `.set Jualan|# Sell Script|1364460677967908960|1h 30m`\nContoh dengan embed: `.set Promosi|# Cek promosi!|1364460677967908960|2h|Judul Embed|Deskripsi Embed|#00FF00`');
         }
         
-        const [taskName, messageText, channelId, delayString, embedTitle, embedDescription, embedColor, embedFooter] = parts;
+        // PERBAIKAN: Menghapus pemisahan untuk footer
+        const [taskName, messageText, channelId, delayString, embedTitle, embedDescription, embedColor] = parts;
         
         let embedData = null;
         if (parts.length > 4) {
+          // PERBAIKAN: Menghapus footer dari objek embedData
           embedData = JSON.stringify({
             title: embedTitle && embedTitle !== '-' ? embedTitle.trim() : null,
             description: embedDescription && embedDescription !== '-' ? embedDescription.trim() : null,
-            color: embedColor && embedColor !== '-' ? embedColor.trim() : null,
-            footer: embedFooter && embedFooter !== '-' ? embedFooter.trim() : null
+            color: embedColor && embedColor !== '-' ? embedColor.trim() : null
           });
         }
 
