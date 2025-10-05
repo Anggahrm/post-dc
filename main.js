@@ -84,16 +84,24 @@ async function loadRespondersIntoCache() {
   try {
     const result = await pool.query('SELECT * FROM auto_responders WHERE is_active = true');
     responderCache.clear();
+    let loadedCount = 0;
+    let skippedCount = 0;
     result.rows.forEach(responder => {
-      const channelIds = JSON.parse(responder.channel_id);
-      channelIds.forEach(channelId => {
-        if (!responderCache.has(channelId)) {
-          responderCache.set(channelId, []);
-        }
-        responderCache.get(channelId).push(responder);
-      });
+      try {
+        const channelIds = JSON.parse(responder.channel_id);
+        channelIds.forEach(channelId => {
+          if (!responderCache.has(channelId)) {
+            responderCache.set(channelId, []);
+          }
+          responderCache.get(channelId).push(responder);
+        });
+        loadedCount++;
+      } catch (parseError) {
+        console.error(`Error parsing responder ID ${responder.id}: ${parseError.message}. Skipping this responder.`);
+        skippedCount++;
+      }
     });
-    console.log(`Loaded ${result.rows.length} active responders into cache.`);
+    console.log(`Loaded ${loadedCount} active responders into cache.${skippedCount > 0 ? ` Skipped ${skippedCount} invalid responder(s).` : ''}`);
   } catch (error) {
     console.error('Error loading responders into cache:', error);
   }
@@ -226,14 +234,19 @@ async function listResponders() {
     
     let responderList = '=== LIST AUTO RESPONDER ===\n';
     result.rows.forEach((responder, index) => {
-      const status = responder.is_active ? '✅ AKTIF' : '❌ NON-AKTIF';
-      const aliasList = JSON.parse(responder.aliases).join(', ');
-      const channelList = JSON.parse(responder.channel_id).join(', ');
-      
-      responderList += `${index + 1}. ID: ${responder.id} | Status: ${status}\n`;
-      responderList += `   Aliases: ${aliasList}\n`;
-      responderList += `   Channels: ${channelList}\n`;
-      responderList += `   Response: ${responder.response_text.substring(0, 50)}${responder.response_text.length > 50 ? '...' : ''}\n\n`;
+      try {
+        const status = responder.is_active ? '✅ AKTIF' : '❌ NON-AKTIF';
+        const aliasList = JSON.parse(responder.aliases).join(', ');
+        const channelList = JSON.parse(responder.channel_id).join(', ');
+        
+        responderList += `${index + 1}. ID: ${responder.id} | Status: ${status}\n`;
+        responderList += `   Aliases: ${aliasList}\n`;
+        responderList += `   Channels: ${channelList}\n`;
+        responderList += `   Response: ${responder.response_text.substring(0, 50)}${responder.response_text.length > 50 ? '...' : ''}\n\n`;
+      } catch (parseError) {
+        responderList += `${index + 1}. ID: ${responder.id} | Status: ⚠️ INVALID DATA\n`;
+        responderList += `   Error: Unable to parse responder data (${parseError.message})\n\n`;
+      }
     });
     
     return responderList;
