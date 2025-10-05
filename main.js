@@ -244,7 +244,7 @@ client.on('messageCreate', async (message) => {
         
         const taskId = await createTask(taskName, messageText, channelId, delayString);
         if (taskId) {
-          message.reply(`✅ Task baru berhasil dibuat dengan ID: ${taskId}. Gunakan `.start ${taskId}` untuk memulainya.`);
+          message.reply(`✅ Task baru berhasil dibuat dengan ID: ${taskId}. Gunakan \`.start ${taskId}\` untuk memulainya.`);
         } else {
           message.reply('❌ Gagal membuat task baru.');
         }
