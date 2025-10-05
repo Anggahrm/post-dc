@@ -1,4 +1,4 @@
-const { Client, EmbedBuilder } = require('discord.js-selfbot-v13');
+const { Client, WebEmbed } = require('discord.js-selfbot-v13');
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -37,13 +37,6 @@ function parseDelay(delayString) {
   return totalMilliseconds || 60000;
 }
 
-function hexToColor(hex) {
-  if (!hex) return null;
-  hex = hex.replace('#', '');
-  const color = parseInt(hex, 16);
-  return isNaN(color) ? null : color;
-}
-
 async function initDatabase() {
   try {
     await pool.query(`
@@ -55,22 +48,11 @@ async function initDatabase() {
         delay_ms INTEGER,
         is_active BOOLEAN DEFAULT false,
         last_post_time TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        embed_data TEXT
       )
     `);
-    console.log('Table checked/created successfully');
-
-    try {
-      await pool.query(`ALTER TABLE auto_post_tasks ADD COLUMN IF NOT EXISTS embed_data TEXT;`);
-      console.log('Column embed_data checked/added successfully');
-    } catch (alterError) {
-      if (alterError.code !== '42701') {
-        console.error('Error adding embed_data column:', alterError);
-      } else {
-        console.log('Column embed_data already exists.');
-      }
-    }
-
+    console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
   }
@@ -99,21 +81,25 @@ async function startAutoPost(taskId) {
     
     const interval = setInterval(async () => {
       try {
-        let messageOptions = { content: task.message_text || null };
+        let finalContent = task.message_text || '';
 
         if (task.embed_data) {
           const embedData = JSON.parse(task.embed_data);
-          const embed = new EmbedBuilder()
+          const embed = new WebEmbed()
             .setTitle(embedData.title || null)
             .setDescription(embedData.description || null)
-            .setColor(hexToColor(embedData.color) || null)
+            .setColor(embedData.color || null)
             .setFooter(embedData.footer ? { text: embedData.footer } : null);
           
-          messageOptions.embeds = [embed];
+          finalContent += embed.toString();
         }
 
-        await channel.send(messageOptions);
-        console.log(`Pesan terkirim untuk task ${taskId} (${task.task_name})`);
+        if (finalContent) {
+            await channel.send(finalContent);
+            console.log(`Pesan terkirim untuk task ${taskId} (${task.task_name})`);
+        } else {
+            console.log(`Task ${taskId} tidak memiliki konten untuk dikirim.`);
+        }
         
         await pool.query(
           'UPDATE auto_post_tasks SET last_post_time = CURRENT_TIMESTAMP WHERE id = $1',
