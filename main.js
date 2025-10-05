@@ -200,7 +200,7 @@ async function createResponder(aliases, responseText, channelId) {
       [aliasesJson, responseText, channelId]
     );
     
-    const newResponder = { id: result.rows[0].id, aliases, response_text, channel_id };
+    const newResponder = { id: result.rows[0].id, aliases, responseText, channel_id };
     if (!responderCache.has(channelId)) {
       responderCache.set(channelId, []);
     }
