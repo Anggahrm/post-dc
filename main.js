@@ -75,9 +75,6 @@ async function initDatabase() {
     `);
     console.log('Table auto_responders checked/created');
 
-    await pool.query(`ALTER TABLE auto_post_tasks DROP COLUMN IF EXISTS embed_data;`);
-    console.log('Column embed_data dropped from auto_post_tasks if it existed');
-
   } catch (error) {
     console.error('Error initializing database:', error);
   }
@@ -200,7 +197,7 @@ async function createResponder(aliases, responseText, channelId) {
       [aliasesJson, responseText, channelId]
     );
     
-    const newResponder = { id: result.rows[0].id, aliases, responseText, channel_id };
+    const newResponder = { id: result.rows[0].id, aliases, responseText, channelId };
     if (!responderCache.has(channelId)) {
       responderCache.set(channelId, []);
     }
